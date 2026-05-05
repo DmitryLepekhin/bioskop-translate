@@ -3,3 +3,7 @@ target/
 .idea/
 *.iml
 .DS_Store
+/AI/
+.env
+.env.*
+!.env.example

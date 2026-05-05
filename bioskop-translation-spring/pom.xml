@@ -10,35 +10,38 @@
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>bioskop-translation-web</artifactId>
+    <artifactId>bioskop-translation-spring</artifactId>
     <packaging>jar</packaging>
 
-    <name>Bioskop Translation Web</name>
+    <name>Bioskop Translation Spring</name>
 
     <dependencies>
         <dependency>
             <groupId>org.example.bioskop</groupId>
-            <artifactId>bioskop-translation-spring</artifactId>
+            <artifactId>bioskop-translation-core</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
+            <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>auth</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
-
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-maven-plugin</artifactId>
-                <version>${spring.boot.version}</version>
-            </plugin>
-        </plugins>
-    </build>
 </project>
