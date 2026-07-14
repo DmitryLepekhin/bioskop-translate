@@ -20,10 +20,13 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.util.StringUtils;
 import software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3ClientBuilder;
+
+import java.net.URI;
 
 @AutoConfiguration
 @EnableConfigurationProperties(TranslationProperties.class)
@@ -118,12 +121,15 @@ public class TranslationAutoConfiguration {
         return new TranslationWorker(repository, translationService, serviceProperties);
     }
 
-    private S3Client s3Client(TranslationProperties properties) {
+    S3Client s3Client(TranslationProperties properties) {
         TranslationProperties.Storage storage = properties.storage();
         S3ClientBuilder builder = S3Client.builder()
             .region(Region.of(storage.s3Region()));
         if (storage.s3Profile() != null && !storage.s3Profile().isBlank()) {
             builder.credentialsProvider(ProfileCredentialsProvider.create(storage.s3Profile()));
+        }
+        if (StringUtils.hasText(storage.s3Endpoint())) {
+            builder.endpointOverride(URI.create(storage.s3Endpoint()));
         }
         return builder.build();
     }

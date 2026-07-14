@@ -13,7 +13,7 @@ public record TranslationProperties(
     int maxAttempts
 ) {
     public TranslationProperties {
-        storage = storage == null ? new Storage(null, null, null, null, null) : storage;
+        storage = storage == null ? new Storage(null, null, null, null, null, null) : storage;
         openai = openai == null ? new OpenAi(null, null) : openai;
         quick = quick == null ? new Quick(0, null) : quick;
         worker = worker == null ? new Worker(false, null, null) : worker;
@@ -25,7 +25,8 @@ public record TranslationProperties(
         Path localRoot,
         String s3Bucket,
         String s3Region,
-        String s3Profile
+        String s3Profile,
+        String s3Endpoint
     ) {
         public Storage {
             type = type == null ? StorageType.LOCAL : type;

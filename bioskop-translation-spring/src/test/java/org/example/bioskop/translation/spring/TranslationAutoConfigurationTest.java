@@ -2,6 +2,7 @@ package org.example.bioskop.translation.spring;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.net.URI;
 import org.example.bioskop.translation.core.JdbcTranslationService;
 import org.example.bioskop.translation.core.TranslationService;
 import org.example.bioskop.translation.core.ai.FakeAiTranslationClient;
@@ -13,6 +14,7 @@ import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.JdbcTemplateAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import software.amazon.awssdk.services.s3.S3Client;
 
 class TranslationAutoConfigurationTest {
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
@@ -40,5 +42,41 @@ class TranslationAutoConfigurationTest {
             assertThat(context).hasSingleBean(TranslationService.class);
             assertThat(context.getBean(TranslationStorage.class)).isInstanceOf(LocalFileTranslationStorage.class);
         });
+    }
+
+    @Test
+    void configuresS3EndpointOverride() {
+        TranslationProperties properties = propertiesWithS3Endpoint("https://fra1.digitaloceanspaces.com");
+
+        try (S3Client client = new TranslationAutoConfiguration().s3Client(properties)) {
+            assertThat(client.serviceClientConfiguration().endpointOverride())
+                .contains(URI.create("https://fra1.digitaloceanspaces.com"));
+        }
+    }
+
+    @Test
+    void leavesS3EndpointOverrideUnsetWhenNotConfigured() {
+        TranslationProperties properties = propertiesWithS3Endpoint("");
+
+        try (S3Client client = new TranslationAutoConfiguration().s3Client(properties)) {
+            assertThat(client.serviceClientConfiguration().endpointOverride()).isEmpty();
+        }
+    }
+
+    private TranslationProperties propertiesWithS3Endpoint(String endpoint) {
+        return new TranslationProperties(
+            new TranslationProperties.Storage(
+                TranslationProperties.StorageType.S3,
+                null,
+                "translations",
+                "fra1",
+                null,
+                endpoint
+            ),
+            null,
+            null,
+            null,
+            0
+        );
     }
 }
