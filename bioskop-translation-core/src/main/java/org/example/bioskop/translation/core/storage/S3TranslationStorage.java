@@ -4,11 +4,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.GetObjectRequest;
-import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
-import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
-import software.amazon.awssdk.services.s3.model.PutObjectRequest;
-import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.services.s3.model.*;
 
 public class S3TranslationStorage implements TranslationStorage {
     private final S3Client s3Client;
@@ -40,6 +36,7 @@ public class S3TranslationStorage implements TranslationStorage {
             s3Client.putObject(
                 PutObjectRequest.builder()
                     .bucket(location.bucket())
+                    .acl(ObjectCannedACL.PUBLIC_READ)
                     .key(location.key())
                     .contentType("text/plain; charset=utf-8")
                     .build(),
