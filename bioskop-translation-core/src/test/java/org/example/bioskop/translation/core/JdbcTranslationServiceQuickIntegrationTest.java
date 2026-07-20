@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.util.UUID;
 import org.example.bioskop.translation.core.ai.FakeAiTranslationClient;
 import org.example.bioskop.translation.core.persistence.JdbcTranslationRepository;
+import org.example.bioskop.translation.core.persistence.TranslationJobRecord;
 import org.example.bioskop.translation.core.storage.LocalFileTranslationStorage;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
@@ -105,6 +106,32 @@ class JdbcTranslationServiceQuickIntegrationTest {
             "en",
             "ru"
         )));
+    }
+
+    @Test
+    void failedRequestReturnsFailedWithoutRequeue() {
+        UUID sourceId = UUID.randomUUID();
+        TranslationJobRecord job = repository.createJob(
+            sourceId,
+            "/source/exercise-en.srt",
+            "en",
+            "ru",
+            "/source/exercise-ru.srt"
+        );
+        repository.claimNextPending(5).orElseThrow();
+        repository.updateJobStatus(job.id(), TranslationStatus.FAILED, "ProviderError", "provider failed");
+        TranslationJobRecord failed = repository.findJob(job.id()).orElseThrow();
+
+        TranslationResponse response = service().requestTranslation(new TranslationRequest(
+            sourceId,
+            "/source/exercise-en.srt",
+            null,
+            "en",
+            "ru"
+        ));
+
+        assertEquals(TranslationStatus.FAILED, response.status());
+        assertEquals(failed, repository.findJob(job.id()).orElseThrow());
     }
 
     private JdbcTranslationService service() {

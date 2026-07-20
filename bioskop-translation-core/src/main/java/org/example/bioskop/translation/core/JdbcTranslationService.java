@@ -96,14 +96,14 @@ public class JdbcTranslationService implements TranslationService {
         }
 
         TranslationJobRecord job = repository.findJob(request.sourceTextId(), targetLang)
-            .map(existing -> handleExistingJob(existing, sourcePath, sourceLang, targetPath))
-            .orElseGet(() -> repository.createJob(
+            .orElseGet(() -> repository.createOrGetJob(
                 request.sourceTextId(),
                 sourcePath,
                 sourceLang,
                 targetLang,
                 targetPath
             ));
+        validateCompatible(job, sourcePath, sourceLang, targetPath);
         return toResponse(job);
     }
 
@@ -176,20 +176,6 @@ public class JdbcTranslationService implements TranslationService {
                 );
             }
         }
-    }
-
-    private TranslationJobRecord handleExistingJob(
-        TranslationJobRecord job,
-        String sourcePath,
-        String sourceLang,
-        String targetPath
-    ) {
-        validateCompatible(job, sourcePath, sourceLang, targetPath);
-        if (job.status() == TranslationStatus.FAILED && job.attempts() < properties.maxAttempts()) {
-            repository.requeueFailed(job.id());
-            return repository.findJob(job.id()).orElseThrow();
-        }
-        return job;
     }
 
     private void validateCompatible(

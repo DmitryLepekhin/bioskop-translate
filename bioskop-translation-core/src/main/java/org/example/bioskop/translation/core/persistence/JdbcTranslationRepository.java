@@ -66,6 +66,60 @@ public class JdbcTranslationRepository {
         return job;
     }
 
+    public TranslationJobRecord createOrGetJob(
+        UUID sourceTextId,
+        String sourcePath,
+        String sourceLang,
+        String targetLang,
+        String targetPath
+    ) {
+        Instant now = Instant.now();
+        TranslationJobRecord candidate = new TranslationJobRecord(
+            UUID.randomUUID(),
+            sourceTextId,
+            sourcePath,
+            sourceLang,
+            targetLang,
+            targetPath,
+            TranslationStatus.PENDING,
+            0,
+            null,
+            null,
+            now,
+            now,
+            null
+        );
+        List<TranslationJobRecord> inserted = jdbc.query("""
+            insert into translation_job (
+                id, source_text_id, source_path, source_lang, target_lang, target_path,
+                status, attempts, error_code, error_message, created_at, updated_at, completed_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict (source_text_id, target_lang) do nothing
+            returning *
+            """,
+            this::mapJob,
+            candidate.id(),
+            candidate.sourceTextId(),
+            candidate.sourcePath(),
+            candidate.sourceLang(),
+            candidate.targetLang(),
+            candidate.targetPath(),
+            TranslationEnumMapper.statusId(candidate.status()),
+            candidate.attempts(),
+            candidate.errorCode(),
+            candidate.errorMessage(),
+            Timestamp.from(candidate.createdAt()),
+            Timestamp.from(candidate.updatedAt()),
+            null
+        );
+        if (!inserted.isEmpty()) {
+            return inserted.get(0);
+        }
+        return findJob(sourceTextId, targetLang)
+            .orElseThrow(() -> new IllegalStateException("Conflicting translation job was not found"));
+    }
+
     public Optional<TranslationJobRecord> findJob(UUID sourceTextId, String targetLang) {
         try {
             return Optional.ofNullable(jdbc.queryForObject(
