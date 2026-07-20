@@ -20,8 +20,13 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -30,6 +35,7 @@ import java.util.concurrent.Flow;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
 import org.example.bioskop.translation.core.TranslationFormat;
+import org.example.bioskop.translation.core.TranslationTelemetry;
 import org.example.bioskop.translation.core.context.TranslationContext;
 import org.example.bioskop.translation.core.srt.SubtitleCue;
 import org.junit.jupiter.api.Test;
@@ -101,6 +107,83 @@ class OpenAiTranslationClientTest {
         assertTrue(cause.getMessage().contains("bad input"));
     }
 
+    @Test
+    void permanentStatusIsNotRetried() {
+        FakeHttpClient httpClient = new FakeHttpClient(400, "{\"error\":\"bad input\"}");
+        OpenAiClientSettings defaults = OpenAiClientSettings.defaults();
+        OpenAiTranslationClient client = new OpenAiTranslationClient(
+            httpClient,
+            OBJECT_MAPPER,
+            "test-key",
+            "test-model",
+            new OpenAiClientSettings(
+                URI.create("https://example.test/responses"),
+                defaults.connectTimeout(),
+                defaults.requestTimeout(),
+                3,
+                Duration.ZERO,
+                Duration.ZERO,
+                0
+            ),
+            TranslationTelemetry.noop(),
+            duration -> {
+            },
+            () -> 0.5,
+            Clock.systemUTC()
+        );
+
+        assertThrows(UncheckedIOException.class, () -> client.translateBatch(request()));
+        assertEquals(1, httpClient.callCount());
+    }
+
+    @Test
+    void throttlingRetriesAndHonorsRetryAfter() {
+        FakeHttpClient httpClient = new FakeHttpClient(
+            List.of(429, 200),
+            List.of(
+                "{\"error\":\"slow down\"}",
+                "{\"output_text\":\"{\\\"translations\\\":[{\\\"cueId\\\":1,\\\"text\\\":\\\"Bonjour\\\"},{\\\"cueId\\\":2,\\\"text\\\":\\\"Monde\\\"}]}\"}"
+            ),
+            Map.of("Retry-After", List.of("2"))
+        );
+        List<Duration> sleeps = new ArrayList<>();
+        List<TranslationTelemetry.ProviderOutcome> outcomes = new ArrayList<>();
+        TranslationTelemetry telemetry = new TranslationTelemetry() {
+            @Override
+            public void providerCall(Duration duration, ProviderOutcome outcome) {
+                outcomes.add(outcome);
+            }
+        };
+        OpenAiClientSettings defaults = OpenAiClientSettings.defaults();
+        OpenAiTranslationClient client = new OpenAiTranslationClient(
+            httpClient,
+            OBJECT_MAPPER,
+            "test-key",
+            "test-model",
+            new OpenAiClientSettings(
+                URI.create("https://example.test/responses"),
+                defaults.connectTimeout(),
+                defaults.requestTimeout(),
+                2,
+                Duration.ofMillis(10),
+                Duration.ofSeconds(5),
+                0
+            ),
+            telemetry,
+            sleeps::add,
+            () -> 0.5,
+            Clock.fixed(Instant.parse("2026-07-20T00:00:00Z"), ZoneOffset.UTC)
+        );
+
+        assertEquals(2, client.translateBatch(request()).size());
+        assertEquals(List.of(Duration.ofSeconds(2)), sleeps);
+        assertEquals(List.of(
+            TranslationTelemetry.ProviderOutcome.THROTTLED,
+            TranslationTelemetry.ProviderOutcome.SUCCESS
+        ), outcomes);
+        assertEquals(2, httpClient.callCount());
+    }
+
     private static OpenAiTranslationClient newClient(FakeHttpClient httpClient) {
         return new OpenAiTranslationClient(
             httpClient,
@@ -127,17 +210,32 @@ class OpenAiTranslationClientTest {
     }
 
     private static final class FakeHttpClient extends HttpClient {
-        private final int statusCode;
-        private final String responseBody;
+        private final List<Integer> statusCodes;
+        private final List<String> responseBodies;
+        private final Map<String, List<String>> responseHeaders;
         private String capturedBody;
+        private int callCount;
 
         private FakeHttpClient(int statusCode, String responseBody) {
-            this.statusCode = statusCode;
-            this.responseBody = responseBody;
+            this(List.of(statusCode), List.of(responseBody), Map.of());
+        }
+
+        private FakeHttpClient(
+            List<Integer> statusCodes,
+            List<String> responseBodies,
+            Map<String, List<String>> responseHeaders
+        ) {
+            this.statusCodes = statusCodes;
+            this.responseBodies = responseBodies;
+            this.responseHeaders = responseHeaders;
         }
 
         private String capturedBody() {
             return capturedBody;
+        }
+
+        private int callCount() {
+            return callCount;
         }
 
         @Override
@@ -191,7 +289,14 @@ class OpenAiTranslationClientTest {
             HttpResponse.BodyHandler<T> responseBodyHandler
         ) throws IOException {
             capturedBody = readBody(request);
-            return new FakeHttpResponse<>(request, statusCode, responseBody);
+            int resultIndex = Math.min(callCount, statusCodes.size() - 1);
+            callCount++;
+            return new FakeHttpResponse<>(
+                request,
+                statusCodes.get(resultIndex),
+                responseBodies.get(resultIndex),
+                responseHeaders
+            );
         }
 
         @Override
@@ -270,11 +375,18 @@ class OpenAiTranslationClientTest {
         private final HttpRequest request;
         private final int statusCode;
         private final String body;
+        private final Map<String, List<String>> headers;
 
-        private FakeHttpResponse(HttpRequest request, int statusCode, String body) {
+        private FakeHttpResponse(
+            HttpRequest request,
+            int statusCode,
+            String body,
+            Map<String, List<String>> headers
+        ) {
             this.request = request;
             this.statusCode = statusCode;
             this.body = body;
+            this.headers = headers;
         }
 
         @Override
@@ -300,7 +412,7 @@ class OpenAiTranslationClientTest {
 
         @Override
         public HttpHeaders headers() {
-            return HttpHeaders.of(java.util.Map.of(), (name, value) -> true);
+            return HttpHeaders.of(headers, (name, value) -> true);
         }
 
         @Override

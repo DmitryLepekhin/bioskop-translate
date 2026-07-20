@@ -17,6 +17,8 @@ public record TranslationJobRecord(
     String errorMessage,
     Instant createdAt,
     Instant updatedAt,
-    Instant completedAt
+    Instant completedAt,
+    UUID leaseToken,
+    Instant leaseExpiresAt
 ) {
 }

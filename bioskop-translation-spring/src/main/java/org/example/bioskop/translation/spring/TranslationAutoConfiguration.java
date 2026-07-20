@@ -1,10 +1,13 @@
 package org.example.bioskop.translation.spring;
 
+import java.net.URI;
 import org.example.bioskop.translation.core.JdbcTranslationService;
 import org.example.bioskop.translation.core.TranslationService;
 import org.example.bioskop.translation.core.TranslationServiceProperties;
+import org.example.bioskop.translation.core.TranslationTelemetry;
 import org.example.bioskop.translation.core.TranslationWorker;
 import org.example.bioskop.translation.core.ai.AiTranslationClient;
+import org.example.bioskop.translation.core.ai.OpenAiClientSettings;
 import org.example.bioskop.translation.core.ai.OpenAiTranslationClient;
 import org.example.bioskop.translation.core.context.TranslationContextLoader;
 import org.example.bioskop.translation.core.persistence.JdbcTranslationRepository;
@@ -18,6 +21,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.util.StringUtils;
@@ -25,8 +29,6 @@ import software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3ClientBuilder;
-
-import java.net.URI;
 
 @AutoConfiguration
 @EnableConfigurationProperties(TranslationProperties.class)
@@ -53,10 +55,24 @@ public class TranslationAutoConfiguration {
         prefix = "bioskop.translation.openai",
         name = "api-key"
     )
-    AiTranslationClient aiTranslationClient(TranslationProperties properties) {
+    AiTranslationClient aiTranslationClient(
+        TranslationProperties properties,
+        ObjectProvider<TranslationTelemetry> telemetryProvider
+    ) {
+        TranslationProperties.OpenAi openAi = properties.openai();
         return new OpenAiTranslationClient(
-            properties.openai().apiKey(),
-            properties.openai().model()
+            openAi.apiKey(),
+            openAi.model(),
+            new OpenAiClientSettings(
+                URI.create(openAi.endpoint()),
+                openAi.connectTimeout(),
+                openAi.requestTimeout(),
+                openAi.maxAttempts(),
+                openAi.initialBackoff(),
+                openAi.maxBackoff(),
+                openAi.jitterFactor()
+            ),
+            telemetryProvider.getIfAvailable(TranslationTelemetry::noop)
         );
     }
 
@@ -66,7 +82,8 @@ public class TranslationAutoConfiguration {
         return new TranslationServiceProperties(
             properties.quick().immediateMaxChars(),
             properties.quick().immediateTimeout(),
-            properties.worker().inProgressTimeout(),
+            properties.worker().leaseDuration(),
+            properties.worker().heartbeatInterval(),
             properties.maxAttempts()
         );
     }
@@ -116,9 +133,15 @@ public class TranslationAutoConfiguration {
     TranslationWorker translationWorker(
         JdbcTranslationRepository repository,
         JdbcTranslationService translationService,
-        TranslationServiceProperties serviceProperties
+        TranslationServiceProperties serviceProperties,
+        ObjectProvider<TranslationTelemetry> telemetryProvider
     ) {
-        return new TranslationWorker(repository, translationService, serviceProperties);
+        return new TranslationWorker(
+            repository,
+            translationService,
+            serviceProperties,
+            telemetryProvider.getIfAvailable(TranslationTelemetry::noop)
+        );
     }
 
     S3Client s3Client(TranslationProperties properties) {

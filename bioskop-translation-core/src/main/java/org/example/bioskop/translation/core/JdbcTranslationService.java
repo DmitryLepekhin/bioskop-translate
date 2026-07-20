@@ -129,53 +129,61 @@ public class JdbcTranslationService implements TranslationService {
             ));
     }
 
-    public void executeJob(TranslationJobRecord job) {
+    public void executeJob(TranslationJobRecord job, TranslationJobLease lease) {
         TranslationJobAttemptRecord attempt = repository.createAttempt(
             job.id(),
             job.attempts(),
             TranslationStatus.IN_PROGRESS
         );
         try {
+            lease.checkpoint();
             if (storage.exists(job.targetPath())) {
-                repository.finishAttempt(attempt.id(), TranslationStatus.COMPLETED, null, null);
-                repository.updateJobStatus(job.id(), TranslationStatus.COMPLETED, null, null);
+                completeOwnedJob(job, lease, attempt);
                 return;
             }
 
+            lease.checkpoint();
             TranslationContext context = contextLoader.loadForSourcePath(job.sourcePath());
             List<SubtitleCue> cues = contextLoader.attachSpeakers(
                 srtParser.parse(storage.readText(job.sourcePath())),
                 context.speakersByCueId()
             );
             TranslationFormat mode = hasContext(context) ? TranslationFormat.ADAPTED : TranslationFormat.QUICK;
-            List<SubtitleCue> translatedCues = translateCues(job, mode, cues, context);
+            List<SubtitleCue> translatedCues = translateCues(job, mode, cues, context, lease);
+            lease.checkpoint();
             storage.writeText(job.targetPath(), srtWriter.write(translatedCues));
+            lease.checkpoint();
 
-            repository.finishAttempt(attempt.id(), TranslationStatus.COMPLETED, null, null);
-            repository.updateJobStatus(job.id(), TranslationStatus.COMPLETED, null, null);
+            completeOwnedJob(job, lease, attempt);
+        } catch (LeaseLostException e) {
+            throw e;
         } catch (RuntimeException e) {
             String message = e.getMessage();
-            repository.finishAttempt(attempt.id(), TranslationStatus.FAILED, e.getClass().getSimpleName(), message);
-            repository.updateJobStatus(job.id(), TranslationStatus.FAILED, e.getClass().getSimpleName(), message);
+            if (repository.failOwnedJob(
+                job.id(),
+                lease.token(),
+                e.getClass().getSimpleName(),
+                message
+            ).isPresent()) {
+                repository.finishAttempt(
+                    attempt.id(),
+                    TranslationStatus.FAILED,
+                    e.getClass().getSimpleName(),
+                    message
+                );
+            }
             throw e;
         }
     }
 
-    public void resetStaleInProgress() {
-        for (TranslationJobRecord job : repository.findStaleInProgress(properties.inProgressTimeout())) {
-            if (storage.exists(job.targetPath())) {
-                repository.updateJobStatus(job.id(), TranslationStatus.COMPLETED, null, null);
-            } else if (job.attempts() < properties.maxAttempts()) {
-                repository.updateJobStatus(job.id(), TranslationStatus.PENDING, null, null);
-            } else {
-                repository.updateJobStatus(
-                    job.id(),
-                    TranslationStatus.FAILED,
-                    "MaxAttemptsExceeded",
-                    "Maximum translation attempts exceeded"
-                );
-            }
-        }
+    private void completeOwnedJob(
+        TranslationJobRecord job,
+        TranslationJobLease lease,
+        TranslationJobAttemptRecord attempt
+    ) {
+        repository.completeOwnedJob(job.id(), lease.token())
+            .orElseThrow(() -> new LeaseLostException("Translation job lease is no longer owned"));
+        repository.finishAttempt(attempt.id(), TranslationStatus.COMPLETED, null, null);
     }
 
     private void validateCompatible(
@@ -199,8 +207,10 @@ public class JdbcTranslationService implements TranslationService {
         TranslationJobRecord job,
         TranslationFormat mode,
         List<SubtitleCue> cues,
-        TranslationContext context
+        TranslationContext context,
+        TranslationJobLease lease
     ) {
+        lease.checkpoint();
         List<CueTranslation> translations = aiClient.translateBatch(new TranslationBatchRequest(
             job.sourceLang(),
             job.targetLang(),
@@ -208,6 +218,7 @@ public class JdbcTranslationService implements TranslationService {
             cues,
             context
         ));
+        lease.checkpoint();
         TranslationResponseValidator.validateCoverage(cues, translations);
         return cues.stream()
             .map(cue -> cue.withText(findTranslation(cue.id(), translations)))
