@@ -20,7 +20,6 @@ public class TranslationWorker {
     }
 
     public boolean runOnce() {
-        translationService.resetStaleInProgress();
         repository.failPendingExhausted(properties.maxAttempts());
         Optional<TranslationJobRecord> pending = repository.claimNextPending(properties.maxAttempts());
         if (pending.isEmpty()) {

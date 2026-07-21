@@ -6,6 +6,8 @@ import java.net.URI;
 import org.example.bioskop.translation.core.JdbcTranslationService;
 import org.example.bioskop.translation.core.TranslationService;
 import org.example.bioskop.translation.core.ai.FakeAiTranslationClient;
+import org.example.bioskop.translation.core.coordination.PostgresAdvisoryWorkerCoordinator;
+import org.example.bioskop.translation.core.coordination.TranslationWorkerCoordinator;
 import org.example.bioskop.translation.core.persistence.JdbcTranslationRepository;
 import org.example.bioskop.translation.core.storage.LocalFileTranslationStorage;
 import org.example.bioskop.translation.core.storage.TranslationStorage;
@@ -61,6 +63,20 @@ class TranslationAutoConfigurationTest {
         try (S3Client client = new TranslationAutoConfiguration().s3Client(properties)) {
             assertThat(client.serviceClientConfiguration().endpointOverride()).isEmpty();
         }
+    }
+
+    @Test
+    void createsConfiguredCoordinatorOnlyWhenWorkerIsEnabled() {
+        contextRunner
+            .withPropertyValues(
+                "bioskop.translation.worker.enabled=true",
+                "bioskop.translation.worker.advisory-lock-key=123456"
+            )
+            .run(context -> {
+                assertThat(context).hasSingleBean(TranslationWorkerCoordinator.class);
+                assertThat(context.getBean(TranslationWorkerCoordinator.class))
+                    .isInstanceOf(PostgresAdvisoryWorkerCoordinator.class);
+            });
     }
 
     private TranslationProperties propertiesWithS3Endpoint(String endpoint) {

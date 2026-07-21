@@ -1,6 +1,7 @@
 package org.example.bioskop.translation.spring;
 
 import org.example.bioskop.translation.core.TranslationWorker;
+import org.example.bioskop.translation.core.coordination.TranslationWorkerCoordinator;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -17,13 +18,15 @@ import org.springframework.scheduling.annotation.Scheduled;
 )
 public class TranslationWorkerScheduler {
     private final TranslationWorker worker;
+    private final TranslationWorkerCoordinator coordinator;
 
-    public TranslationWorkerScheduler(TranslationWorker worker) {
+    public TranslationWorkerScheduler(TranslationWorker worker, TranslationWorkerCoordinator coordinator) {
         this.worker = worker;
+        this.coordinator = coordinator;
     }
 
     @Scheduled(fixedDelayString = "${bioskop.translation.worker.poll-delay:PT5S}")
     public void poll() {
-        worker.runOnce();
+        coordinator.executeIfAcquired(worker::runOnce);
     }
 }

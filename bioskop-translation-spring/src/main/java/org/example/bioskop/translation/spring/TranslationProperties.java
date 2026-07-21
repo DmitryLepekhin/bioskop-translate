@@ -2,6 +2,7 @@ package org.example.bioskop.translation.spring;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import org.example.bioskop.translation.core.coordination.PostgresAdvisoryWorkerCoordinator;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "bioskop.translation")
@@ -62,11 +63,13 @@ public record TranslationProperties(
     public record Worker(
         boolean enabled,
         Duration pollDelay,
-        Duration inProgressTimeout
+        Long advisoryLockKey
     ) {
         public Worker {
             pollDelay = pollDelay == null ? Duration.ofSeconds(5) : pollDelay;
-            inProgressTimeout = inProgressTimeout == null ? Duration.ofMinutes(5) : inProgressTimeout;
+            advisoryLockKey = advisoryLockKey == null
+                ? PostgresAdvisoryWorkerCoordinator.DEFAULT_LOCK_KEY
+                : advisoryLockKey;
         }
     }
 }

@@ -161,21 +161,13 @@ public class JdbcTranslationService implements TranslationService {
         }
     }
 
-    public void resetStaleInProgress() {
-        for (TranslationJobRecord job : repository.findStaleInProgress(properties.inProgressTimeout())) {
-            if (storage.exists(job.targetPath())) {
-                repository.updateJobStatus(job.id(), TranslationStatus.COMPLETED, null, null);
-            } else if (job.attempts() < properties.maxAttempts()) {
-                repository.updateJobStatus(job.id(), TranslationStatus.PENDING, null, null);
-            } else {
-                repository.updateJobStatus(
-                    job.id(),
-                    TranslationStatus.FAILED,
-                    "MaxAttemptsExceeded",
-                    "Maximum translation attempts exceeded"
-                );
-            }
-        }
+    /**
+     * Requeues an interrupted job after an operator has verified that its former worker cannot resume.
+     * Returns false when the job is no longer in progress or has exhausted its attempt budget.
+     */
+    public boolean requeueInProgressForManualRecovery(java.util.UUID jobId) {
+        Objects.requireNonNull(jobId, "jobId must not be null");
+        return repository.requeueInProgressForManualRecovery(jobId, properties.maxAttempts());
     }
 
     private void validateCompatible(

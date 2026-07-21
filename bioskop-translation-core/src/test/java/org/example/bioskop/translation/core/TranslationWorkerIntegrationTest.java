@@ -1,6 +1,7 @@
 package org.example.bioskop.translation.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
@@ -31,6 +32,7 @@ class TranslationWorkerIntegrationTest {
     Path tempDir;
 
     private JdbcTranslationRepository repository;
+    private JdbcTemplate jdbc;
     private LocalFileTranslationStorage storage;
 
     @BeforeEach
@@ -47,11 +49,12 @@ class TranslationWorkerIntegrationTest {
             .load()
             .migrate();
 
-        repository = new JdbcTranslationRepository(new JdbcTemplate(new DriverManagerDataSource(
+        jdbc = new JdbcTemplate(new DriverManagerDataSource(
             POSTGRES.getJdbcUrl(),
             POSTGRES.getUsername(),
             POSTGRES.getPassword()
-        )));
+        ));
+        repository = new JdbcTranslationRepository(jdbc);
         storage = new LocalFileTranslationStorage(tempDir);
     }
 
@@ -106,5 +109,23 @@ class TranslationWorkerIntegrationTest {
         assertTrue(new TranslationWorker(repository, service, TranslationServiceProperties.defaults()).runOnce());
 
         assertEquals(TranslationStatus.COMPLETED, repository.findJob(sourceId, "ru").orElseThrow().status());
+    }
+
+    @Test
+    void oldInProgressJobIsNotRecoveredAutomatically() {
+        UUID sourceId = UUID.randomUUID();
+        JdbcTranslationService service = new JdbcTranslationService(
+            repository,
+            storage,
+            new FakeAiTranslationClient(cue -> { throw new AssertionError("AI should not be called"); })
+        );
+        service.requestTranslation(new TranslationRequest(
+            sourceId, "/source/input-en.srt", "/source/input-ru.srt", "en", "ru"
+        ));
+        TranslationJobRecord claimed = repository.claimNextPending(5).orElseThrow();
+        jdbc.update("update translation_job set updated_at = now() - interval '1 day' where id = ?", claimed.id());
+
+        assertFalse(new TranslationWorker(repository, service, TranslationServiceProperties.defaults()).runOnce());
+        assertEquals(TranslationStatus.IN_PROGRESS, repository.findJob(claimed.id()).orElseThrow().status());
     }
 }

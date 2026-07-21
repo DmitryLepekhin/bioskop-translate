@@ -6,6 +6,8 @@ import org.example.bioskop.translation.core.TranslationServiceProperties;
 import org.example.bioskop.translation.core.TranslationWorker;
 import org.example.bioskop.translation.core.ai.AiTranslationClient;
 import org.example.bioskop.translation.core.ai.OpenAiTranslationClient;
+import org.example.bioskop.translation.core.coordination.PostgresAdvisoryWorkerCoordinator;
+import org.example.bioskop.translation.core.coordination.TranslationWorkerCoordinator;
 import org.example.bioskop.translation.core.context.TranslationContextLoader;
 import org.example.bioskop.translation.core.persistence.JdbcTranslationRepository;
 import org.example.bioskop.translation.core.srt.SrtParser;
@@ -27,6 +29,7 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3ClientBuilder;
 
 import java.net.URI;
+import javax.sql.DataSource;
 
 @AutoConfiguration
 @EnableConfigurationProperties(TranslationProperties.class)
@@ -66,7 +69,6 @@ public class TranslationAutoConfiguration {
         return new TranslationServiceProperties(
             properties.quick().immediateMaxChars(),
             properties.quick().immediateTimeout(),
-            properties.worker().inProgressTimeout(),
             properties.maxAttempts()
         );
     }
@@ -119,6 +121,20 @@ public class TranslationAutoConfiguration {
         TranslationServiceProperties serviceProperties
     ) {
         return new TranslationWorker(repository, translationService, serviceProperties);
+    }
+
+    @Bean
+    @ConditionalOnProperty(
+        prefix = "bioskop.translation.worker",
+        name = "enabled",
+        havingValue = "true"
+    )
+    @ConditionalOnMissingBean
+    TranslationWorkerCoordinator translationWorkerCoordinator(
+        DataSource dataSource,
+        TranslationProperties properties
+    ) {
+        return new PostgresAdvisoryWorkerCoordinator(dataSource, properties.worker().advisoryLockKey());
     }
 
     S3Client s3Client(TranslationProperties properties) {

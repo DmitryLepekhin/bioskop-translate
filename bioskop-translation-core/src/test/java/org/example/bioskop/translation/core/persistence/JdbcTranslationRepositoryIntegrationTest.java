@@ -104,4 +104,36 @@ class JdbcTranslationRepositoryIntegrationTest {
         assertEquals(1, repository.failPendingExhausted(5));
         assertEquals(TranslationStatus.FAILED, repository.findJob(job.id()).orElseThrow().status());
     }
+
+    @Test
+    void manuallyRecoversInProgressJobAndClosesInterruptedAttempt() {
+        TranslationJobRecord job = repository.createJob(
+            UUID.randomUUID(), "/source/en.srt", "en", "ru", "/source/ru.srt"
+        );
+        TranslationJobRecord claimed = repository.claimNextPending(5).orElseThrow();
+        repository.createAttempt(claimed.id(), claimed.attempts(), TranslationStatus.IN_PROGRESS);
+
+        assertTrue(repository.requeueInProgressForManualRecovery(job.id(), 5));
+
+        TranslationJobRecord recovered = repository.findJob(job.id()).orElseThrow();
+        TranslationJobAttemptRecord attempt = repository.findAttempts(job.id()).get(0);
+        assertEquals(TranslationStatus.PENDING, recovered.status());
+        assertEquals(1, recovered.attempts());
+        assertEquals(TranslationStatus.FAILED, attempt.status());
+        assertEquals("ManualRecovery", attempt.errorCode());
+        assertNotNull(attempt.finishedAt());
+        assertTrue(!repository.requeueInProgressForManualRecovery(job.id(), 5));
+    }
+
+    @Test
+    void manualRecoveryDoesNotChangeOtherStatesOrExhaustedJob() {
+        TranslationJobRecord pending = repository.createJob(
+            UUID.randomUUID(), "/source/pending-en.srt", "en", "ru", "/source/pending-ru.srt"
+        );
+        assertTrue(!repository.requeueInProgressForManualRecovery(pending.id(), 5));
+
+        TranslationJobRecord claimed = repository.claimNextPending(1).orElseThrow();
+        assertTrue(!repository.requeueInProgressForManualRecovery(claimed.id(), 1));
+        assertEquals(TranslationStatus.IN_PROGRESS, repository.findJob(claimed.id()).orElseThrow().status());
+    }
 }

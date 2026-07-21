@@ -3,7 +3,6 @@ package org.example.bioskop.translation.core.persistence;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -223,17 +222,45 @@ public class JdbcTranslationRepository {
         );
     }
 
-    public List<TranslationJobRecord> findStaleInProgress(Duration timeout) {
-        return jdbc.query("""
-            select *
-            from translation_job
-            where status = ? and updated_at < ?
-            order by updated_at
+    /**
+     * Requeues only an in-progress job below the attempt limit. The caller must first verify that
+     * the worker which owned the interrupted attempt cannot resume.
+     */
+    public boolean requeueInProgressForManualRecovery(UUID jobId, int maxAttempts) {
+        List<UUID> recovered = jdbc.query("""
+            with eligible as (
+                select id
+                from translation_job
+                where id = ? and status = ? and attempts < ?
+                for update
+            ), closed_attempts as (
+                update translation_job_attempt attempt
+                set status = ?, finished_at = ?, error_code = ?, error_message = ?
+                from eligible
+                where attempt.job_id = eligible.id
+                  and attempt.status = ?
+                  and attempt.finished_at is null
+                returning attempt.id
+            )
+            update translation_job job
+            set status = ?, error_code = null, error_message = null, updated_at = ?, completed_at = null
+            from eligible
+            where job.id = eligible.id
+            returning job.id
             """,
-            this::mapJob,
+            (rs, rowNum) -> rs.getObject(1, UUID.class),
+            jobId,
             TranslationEnumMapper.statusId(TranslationStatus.IN_PROGRESS),
-            Timestamp.from(Instant.now().minus(timeout))
+            maxAttempts,
+            TranslationEnumMapper.statusId(TranslationStatus.FAILED),
+            Timestamp.from(Instant.now()),
+            "ManualRecovery",
+            "Interrupted attempt closed by an operator before manual requeue",
+            TranslationEnumMapper.statusId(TranslationStatus.IN_PROGRESS),
+            TranslationEnumMapper.statusId(TranslationStatus.PENDING),
+            Timestamp.from(Instant.now())
         );
+        return !recovered.isEmpty();
     }
 
     public TranslationJobAttemptRecord createAttempt(UUID jobId, int attemptNo, TranslationStatus status) {
