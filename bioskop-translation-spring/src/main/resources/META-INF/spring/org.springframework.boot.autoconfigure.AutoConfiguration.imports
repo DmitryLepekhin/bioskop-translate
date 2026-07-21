@@ -1,3 +1,2 @@
-org.example.bioskop.translation.spring.TranslationMetricsAutoConfiguration
 org.example.bioskop.translation.spring.TranslationAutoConfiguration
 org.example.bioskop.translation.spring.TranslationWorkerScheduler

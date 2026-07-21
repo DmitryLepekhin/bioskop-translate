@@ -40,8 +40,6 @@ public class JdbcTranslationRepository {
             null,
             now,
             now,
-            null,
-            null,
             null
         );
         jdbc.update("""
@@ -89,8 +87,6 @@ public class JdbcTranslationRepository {
             null,
             now,
             now,
-            null,
-            null,
             null
         );
         List<TranslationJobRecord> inserted = jdbc.query("""
@@ -162,8 +158,7 @@ public class JdbcTranslationRepository {
         Timestamp completedAt = status == TranslationStatus.COMPLETED ? Timestamp.from(now) : null;
         return jdbc.queryForObject("""
             update translation_job
-            set status = ?, error_code = ?, error_message = ?, updated_at = ?, completed_at = ?,
-                lease_token = null, lease_expires_at = null
+            set status = ?, error_code = ?, error_message = ?, updated_at = ?, completed_at = ?
             where id = ?
             returning *
             """,
@@ -178,142 +173,66 @@ public class JdbcTranslationRepository {
     }
 
     public Optional<TranslationJobRecord> claimNextPending(int maxAttempts) {
-        return claimNextAvailable(maxAttempts, Duration.ofMinutes(5), UUID.randomUUID())
-            .map(ClaimedTranslationJob::job);
-    }
-
-    public Optional<ClaimedTranslationJob> claimNextAvailable(
-        int maxAttempts,
-        Duration leaseDuration,
-        UUID leaseToken
-    ) {
-        List<ClaimedTranslationJob> jobs = jdbc.query("""
-            with candidate as (
-                select id, status as previous_status
+        List<TranslationJobRecord> jobs = jdbc.query("""
+            update translation_job
+            set status = ?, attempts = attempts + 1, error_code = null, error_message = null, updated_at = ?
+            where id = (
+                select id
                 from translation_job
-                where attempts < ?
-                  and (
-                    status = ?
-                    or (status = ? and (lease_expires_at is null or lease_expires_at <= current_timestamp))
-                  )
+                where status = ? and attempts < ?
                 order by created_at
                 for update skip locked
                 limit 1
             )
-            update translation_job job
-            set status = ?, attempts = job.attempts + 1,
-                error_code = null, error_message = null, completed_at = null,
-                updated_at = current_timestamp, lease_token = ?,
-                lease_expires_at = current_timestamp + cast(? as bigint) * interval '1 millisecond'
-            from candidate
-            where job.id = candidate.id
-            returning job.*, candidate.previous_status
-            """,
-            (rs, rowNum) -> new ClaimedTranslationJob(
-                mapJob(rs, rowNum),
-                TranslationEnumMapper.statusFromId(rs.getInt("previous_status")) == TranslationStatus.IN_PROGRESS
-            ),
-            maxAttempts,
-            TranslationEnumMapper.statusId(TranslationStatus.PENDING),
-            TranslationEnumMapper.statusId(TranslationStatus.IN_PROGRESS),
-            TranslationEnumMapper.statusId(TranslationStatus.IN_PROGRESS),
-            leaseToken,
-            leaseDuration.toMillis()
-        );
-        return jobs.stream().findFirst();
-    }
-
-    public boolean renewLease(UUID jobId, UUID leaseToken, Duration leaseDuration) {
-        return jdbc.update("""
-            update translation_job
-            set updated_at = current_timestamp,
-                lease_expires_at = current_timestamp + cast(? as bigint) * interval '1 millisecond'
-            where id = ? and status = ? and lease_token = ?
-              and lease_expires_at > current_timestamp
-            """,
-            leaseDuration.toMillis(),
-            jobId,
-            TranslationEnumMapper.statusId(TranslationStatus.IN_PROGRESS),
-            leaseToken
-        ) == 1;
-    }
-
-    public Optional<TranslationJobRecord> completeOwnedJob(UUID jobId, UUID leaseToken) {
-        return updateOwnedJob(jobId, leaseToken, TranslationStatus.COMPLETED, null, null);
-    }
-
-    public Optional<TranslationJobRecord> failOwnedJob(
-        UUID jobId,
-        UUID leaseToken,
-        String errorCode,
-        String errorMessage
-    ) {
-        return updateOwnedJob(jobId, leaseToken, TranslationStatus.FAILED, errorCode, errorMessage);
-    }
-
-    private Optional<TranslationJobRecord> updateOwnedJob(
-        UUID jobId,
-        UUID leaseToken,
-        TranslationStatus status,
-        String errorCode,
-        String errorMessage
-    ) {
-        List<TranslationJobRecord> jobs = jdbc.query("""
-            update translation_job
-            set status = ?, error_code = ?, error_message = ?, updated_at = current_timestamp,
-                completed_at = case when ? = ? then current_timestamp else null end,
-                lease_token = null, lease_expires_at = null
-            where id = ? and status = ? and lease_token = ?
-              and lease_expires_at > current_timestamp
             returning *
             """,
             this::mapJob,
-            TranslationEnumMapper.statusId(status),
-            errorCode,
-            errorMessage,
-            TranslationEnumMapper.statusId(status),
-            TranslationEnumMapper.statusId(TranslationStatus.COMPLETED),
-            jobId,
             TranslationEnumMapper.statusId(TranslationStatus.IN_PROGRESS),
-            leaseToken
+            Timestamp.from(Instant.now()),
+            TranslationEnumMapper.statusId(TranslationStatus.PENDING),
+            maxAttempts
         );
         return jobs.stream().findFirst();
     }
 
-    public int failExhaustedAvailable(int maxAttempts) {
+    public int failPendingExhausted(int maxAttempts) {
         return jdbc.update("""
             update translation_job
-            set status = ?, error_code = ?, error_message = ?, updated_at = current_timestamp,
-                lease_token = null, lease_expires_at = null
-            where attempts >= ? and (
-                status = ?
-                or (status = ? and (lease_expires_at is null or lease_expires_at <= current_timestamp))
-            )
+            set status = ?, error_code = ?, error_message = ?, updated_at = ?
+            where status = ? and attempts >= ?
             """,
             TranslationEnumMapper.statusId(TranslationStatus.FAILED),
             "MaxAttemptsExceeded",
             "Maximum translation attempts exceeded",
-            maxAttempts,
+            Timestamp.from(Instant.now()),
             TranslationEnumMapper.statusId(TranslationStatus.PENDING),
-            TranslationEnumMapper.statusId(TranslationStatus.IN_PROGRESS)
+            maxAttempts
         );
-    }
-
-    public int failPendingExhausted(int maxAttempts) {
-        return failExhaustedAvailable(maxAttempts);
     }
 
     public int requeueFailed(UUID jobId) {
         return jdbc.update("""
             update translation_job
-            set status = ?, error_code = null, error_message = null, updated_at = ?, completed_at = null,
-                lease_token = null, lease_expires_at = null
+            set status = ?, error_code = null, error_message = null, updated_at = ?, completed_at = null
             where id = ? and status = ?
             """,
             TranslationEnumMapper.statusId(TranslationStatus.PENDING),
             Timestamp.from(Instant.now()),
             jobId,
             TranslationEnumMapper.statusId(TranslationStatus.FAILED)
+        );
+    }
+
+    public List<TranslationJobRecord> findStaleInProgress(Duration timeout) {
+        return jdbc.query("""
+            select *
+            from translation_job
+            where status = ? and updated_at < ?
+            order by updated_at
+            """,
+            this::mapJob,
+            TranslationEnumMapper.statusId(TranslationStatus.IN_PROGRESS),
+            Timestamp.from(Instant.now().minus(timeout))
         );
     }
 
@@ -351,27 +270,13 @@ public class JdbcTranslationRepository {
         jdbc.update("""
             update translation_job_attempt
             set status = ?, finished_at = ?, error_code = ?, error_message = ?
-            where id = ? and finished_at is null
+            where id = ?
             """,
             TranslationEnumMapper.statusId(status),
             Timestamp.from(Instant.now()),
             errorCode,
             errorMessage,
             attemptId
-        );
-    }
-
-    public int failOpenAttempts(UUID jobId) {
-        return jdbc.update("""
-            update translation_job_attempt
-            set status = ?, finished_at = current_timestamp,
-                error_code = ?, error_message = ?
-            where job_id = ? and finished_at is null
-            """,
-            TranslationEnumMapper.statusId(TranslationStatus.FAILED),
-            "LeaseExpired",
-            "Translation job lease expired",
-            jobId
         );
     }
 
@@ -385,7 +290,6 @@ public class JdbcTranslationRepository {
 
     private TranslationJobRecord mapJob(ResultSet rs, int rowNum) throws SQLException {
         Timestamp completedAt = rs.getTimestamp("completed_at");
-        Timestamp leaseExpiresAt = rs.getTimestamp("lease_expires_at");
         return new TranslationJobRecord(
             rs.getObject("id", UUID.class),
             rs.getObject("source_text_id", UUID.class),
@@ -399,9 +303,7 @@ public class JdbcTranslationRepository {
             rs.getString("error_message"),
             rs.getTimestamp("created_at").toInstant(),
             rs.getTimestamp("updated_at").toInstant(),
-            completedAt == null ? null : completedAt.toInstant(),
-            rs.getObject("lease_token", UUID.class),
-            leaseExpiresAt == null ? null : leaseExpiresAt.toInstant()
+            completedAt == null ? null : completedAt.toInstant()
         );
     }
 

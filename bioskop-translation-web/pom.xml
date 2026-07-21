@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.example.bioskop</groupId>
         <artifactId>bioskop-translation</artifactId>
-        <version>0.1.2-SNAPSHOT</version>
+        <version>0.1.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>bioskop-translation-web</artifactId>
